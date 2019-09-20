@@ -784,7 +784,7 @@ static std::set<StringRef> MachOSectionsToDisassemble = {};
 
 static bool isAFunctionSymbol(const ObjectFile *Obj,
                               SectionSymbolInfo &Symbol) {
-  if (Obj->isELF()) {
+  if (Obj->isELF() || Obj->isCOFF()) {
     return (std::get<2>(Symbol) == ELF::STT_FUNC);
   }
   if (Obj->isMachO()) {
@@ -954,6 +954,21 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
   // Linked executables (.exe and .dll files) typically don't include a real
   // symbol table but they might contain an export table.
   if (const auto *COFFObj = dyn_cast<COFFObjectFile>(Obj)) {
+    auto entryPoint = COFFObj->getImageBase() +
+                      COFFObj->getPE32PlusHeader()->AddressOfEntryPoint;
+    auto Sec = std::upper_bound(
+        SectionAddresses.begin(), SectionAddresses.end(), entryPoint,
+        [](uint64_t LHS, const std::pair<uint64_t, SectionRef> &RHS) {
+          return LHS < RHS.first;
+        });
+    if (Sec != SectionAddresses.begin())
+      --Sec;
+    else
+      Sec = SectionAddresses.end();
+
+    if (Sec != SectionAddresses.end())
+      AllSymbols[Sec->second].emplace_back(entryPoint, "main", ELF::STT_FUNC);
+
     for (const auto &ExportEntry : COFFObj->export_directories()) {
       StringRef Name;
       error(ExportEntry.getSymbolName(Name));
@@ -1068,7 +1083,7 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
     }
 
     // If the section has no symbol at the start, just insert a dummy one.
-    if (Symbols.empty() || std::get<0>(Symbols[0]) != 0) {
+    if (Symbols.empty()) { // || std::get<0>(Symbols[0]) != 0) {
       Symbols.insert(
           Symbols.begin(),
           std::make_tuple(SectionAddr, name,
