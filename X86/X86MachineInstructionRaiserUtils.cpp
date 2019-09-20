@@ -16,6 +16,7 @@
 #include "X86RaisedValueTracker.h"
 #include "X86RegisterUtils.h"
 #include "llvm-mctoll.h"
+#include "llvm/Object/COFF.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include <X86InstrBuilder.h>
@@ -422,13 +423,13 @@ Value *X86MachineInstructionRaiser::createPCRelativeAccesssValue(
 
   // 3. Compute the PC-relative offset.
 
-  const ELF64LEObjectFile *Elf64LEObjFile =
-      dyn_cast<ELF64LEObjectFile>(MR->getObjectFile());
+  const COFFObjectFile *Elf64LEObjFile =
+      dyn_cast<COFFObjectFile>(MR->getObjectFile());
   assert(Elf64LEObjFile != nullptr &&
          "Only 64-bit ELF binaries supported at present.");
 
-  auto EType = Elf64LEObjFile->getELFFile()->getHeader()->e_type;
-  if ((EType == ELF::ET_DYN) || (EType == ELF::ET_EXEC)) {
+//  auto EType = Elf64LEObjFile->getELFFile()->getHeader()->e_type;
+  if (true) { //(EType == ELF::ET_DYN) || (EType == ELF::ET_EXEC)) {
     uint64_t PCOffset = TextSectionAddress + MCInstOffset + MCInstSz + Disp;
     const RelocationRef *DynReloc = MR->getDynRelocAtOffset(PCOffset);
 
@@ -436,6 +437,7 @@ Value *X86MachineInstructionRaiser::createPCRelativeAccesssValue(
     //       "Failed to get dynamic relocation for pc-relative offset");
     // If there is a dynamic relocation for the PCOffset
     if (DynReloc) {
+#if 0
       if (DynReloc->getType() == ELF::R_X86_64_GLOB_DAT) {
         Expected<StringRef> Symname = DynReloc->getSymbol()->getName();
         assert(Symname &&
@@ -529,10 +531,14 @@ Value *X86MachineInstructionRaiser::createPCRelativeAccesssValue(
         assert(false && "Unexpected relocation type referenced in PC-relative "
                         "memory access instruction.");
       }
-    } else {
+#endif
+}
+else {
       MemrefValue = getGlobalVariableValueAt(MI, PCOffset);
     }
-  } else if (EType == ELF::ET_REL) {
+  }
+#if 0
+else if (EType == ELF::ET_REL) {
     const RelocationRef *TextReloc =
         MR->getTextRelocAtOffset(MCInstOffset, MCInstSz);
 
@@ -639,7 +645,9 @@ Value *X86MachineInstructionRaiser::createPCRelativeAccesssValue(
       assert(false && "Unexpected relocation type referenced in PC-relative "
                       "memory access instruction.");
     }
-  } else {
+  }
+#endif
+ else {
     assert(false && "Unhandled binary type. Only object files and shared "
                     "libraries supported");
   }
@@ -900,14 +908,11 @@ Value *X86MachineInstructionRaiser::getStackAllocatedValue(
 Function *X86MachineInstructionRaiser::getTargetFunctionAtPLTOffset(
     const MachineInstr &mi, uint64_t pltEntOff) {
   Function *CalledFunc = nullptr;
-  const ELF64LEObjectFile *Elf64LEObjFile =
-      dyn_cast<ELF64LEObjectFile>(MR->getObjectFile());
-  assert(Elf64LEObjFile != nullptr &&
-         "Only 64-bit ELF binaries supported at present.");
-  unsigned char ExecType = Elf64LEObjFile->getELFFile()->getHeader()->e_type;
-  assert((ExecType == ELF::ET_DYN) || (ExecType == ELF::ET_EXEC));
+  auto ObjFile = dyn_cast<ObjectFile>(MR->getObjectFile());
+//  unsigned char ExecType = ObjFile->getELFFile()->getHeader()->e_type;
+//  assert((ExecType == ELF::ET_DYN) || (ExecType == ELF::ET_EXEC));
   // Find the section that contains the offset. That must be the PLT section
-  for (section_iterator SecIter : Elf64LEObjFile->sections()) {
+  for (section_iterator SecIter : ObjFile->sections()) {
     uint64_t SecStart = SecIter->getAddress();
     uint64_t SecEnd = SecStart + SecIter->getSize();
     if ((SecStart <= pltEntOff) && (SecEnd >= pltEntOff)) {
@@ -1008,7 +1013,7 @@ Function *X86MachineInstructionRaiser::getTargetFunctionAtPLTOffset(
       assert((GotPltReloc->getType() == ELF::R_X86_64_JUMP_SLOT) &&
              "Unexpected relocation type for PLT jmp instruction");
       symbol_iterator CalledFuncSym = GotPltReloc->getSymbol();
-      assert(CalledFuncSym != Elf64LEObjFile->symbol_end() &&
+      assert(CalledFuncSym != ObjFile->symbol_end() &&
              "Failed to find relocation symbol for PLT entry");
       Expected<StringRef> CalledFuncSymName = CalledFuncSym->getName();
       assert(CalledFuncSymName &&
@@ -1043,6 +1048,7 @@ const Value *X86MachineInstructionRaiser::getOrCreateGlobalRODataValueAtOffset(
   const Value *RODataValue = MR->getRODataValueAt(Offset);
   if (RODataValue == nullptr) {
     // Only if the imm value is a positive value
+    // TODO
     const ELF64LEObjectFile *Elf64LEObjFile =
         dyn_cast<ELF64LEObjectFile>(MR->getObjectFile());
     assert(Elf64LEObjFile != nullptr &&
@@ -1163,6 +1169,7 @@ Value *
 X86MachineInstructionRaiser::getGlobalVariableValueAt(const MachineInstr &MI,
                                                       uint64_t Offset) {
   Value *GlobalVariableValue = nullptr;
+  // TODO
   const ELF64LEObjectFile *Elf64LEObjFile =
       dyn_cast<ELF64LEObjectFile>(MR->getObjectFile());
   assert(Elf64LEObjFile != nullptr &&
