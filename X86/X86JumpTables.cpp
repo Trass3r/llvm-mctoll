@@ -53,15 +53,12 @@ bool X86MachineInstructionRaiser::raiseMachineJumpTable() {
             TextSectionAddress + MCInstIndex + MCInstSz + JmpOffset;
 
         // Get the contents of the section with JmpTblBaseMemAddress
-        const ELF64LEObjectFile *Elf64LEObjFile =
-            dyn_cast<ELF64LEObjectFile>(MR->getObjectFile());
-        assert(Elf64LEObjFile != nullptr &&
-               "Only 64-bit ELF binaries supported at present.");
+        const ObjectFile *ObjFile = MR->getObjectFile();
         const unsigned char *DataContent = nullptr;
         size_t DataSize = 0;
         size_t JmpTblEntryOffset = 0;
         // Find the section.
-        for (section_iterator SecIter : Elf64LEObjFile->sections()) {
+        for (section_iterator SecIter : ObjFile->sections()) {
           uint64_t SecStart = SecIter->getAddress();
           uint64_t SecEnd = SecStart + SecIter->getSize();
           if ((SecStart <= JmpTblBaseMemAddress) &&
@@ -145,15 +142,12 @@ bool X86MachineInstructionRaiser::raiseMachineJumpTable() {
           if (JmpTblBaseAddress > 0) {
             // This value should be an absolute offset into a rodata section.
             // Get the contents of the section with JmpTblBase
-            const ELF64LEObjectFile *Elf64LEObjFile =
-                dyn_cast<ELF64LEObjectFile>(MR->getObjectFile());
-            assert(Elf64LEObjFile != nullptr &&
-                   "Only 64-bit ELF binaries supported at present.");
+            const ObjectFile *ObjFile = MR->getObjectFile();
             StringRef Contents;
             size_t DataSize = 0;
             size_t JmpTblBaseOffset = 0;
             // Find the section.
-            for (section_iterator SecIter : Elf64LEObjFile->sections()) {
+            for (section_iterator SecIter : ObjFile->sections()) {
               uint64_t SecStart = SecIter->getAddress();
               uint64_t SecEnd = SecStart + SecIter->getSize();
               // Potential JmpTblBase is in a data section
