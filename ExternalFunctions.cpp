@@ -43,7 +43,10 @@ const std::map<StringRef, ExternalFunctions::RetAndArgs>
         {"strncpy", {"i8*", {"i8*", "i8*", "i64"}, false}},
         {"strtol", {"i64", {"i8*", "i8**", "i32"}, false}},
         {"tanh", {"float", {"float"}, false}},
-        {"time", {"i64", {"i64*"}, false}}};
+        {"time", {"i64", {"i64*"}, false}},
+        {"_Znwm", {"i8*", {"i64"}, false}},   // new
+        {"_ZdlPv", {"void", {"i8*"}, false}}, // delete
+};
 
 // Construct and return a Function* corresponding to a known external function
 Function *ExternalFunctions::Create(StringRef &CFuncName, ModuleRaiser &MR) {
