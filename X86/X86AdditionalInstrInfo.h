@@ -15,12 +15,13 @@
 #define LLVM_TOOLS_LLVM_MCTOLL_X86_X86ADDITIONALINSTRINFO_H
 
 #include <cassert>
-#include <map>
+#include <cstdint>
+#include <utility>
 
 namespace mctoll {
 
 // Instruction Kinds
-typedef enum {
+enum InstructionKind : uint8_t {
   Unknown = 0,
   BINARY_OP_RM,
   BINARY_OP_RR,
@@ -42,34 +43,34 @@ typedef enum {
   NOT_OP_MEM,
   SETCC,
   STORE_FPU_REG,
-} InstructionKind;
+};
 
-typedef struct {
+struct X86AdditionalInstrInfo {
   // A vaue of 8 or 4 or 2 or 1 indicates the size of memory an instruction
   // operates on. A value of 0 indicates that the instruction does not have
   // memory operands.
-  unsigned short MemOpSize;
+  uint8_t MemOpSize;
   // Instruction kind
   InstructionKind InstKind;
   // Add any necessary additional instruction related data as fields of this
   // structure.
-} X86AdditionalInstrInfo;
+};
 
-using const_addl_instr_info = const std::map<unsigned, X86AdditionalInstrInfo>;
-using const_addl_instr_info_iteartor = const_addl_instr_info::iterator;
+using const_addl_instr_info =
+    std::pair<uint16_t, X86AdditionalInstrInfo>[];
 
-extern const_addl_instr_info X86AddlInstrInfo;
+extern const const_addl_instr_info X86AddlInstrInfo;
 
 static inline InstructionKind getInstructionKind(unsigned int Opcode) {
-  auto Iter = mctoll::X86AddlInstrInfo.find(Opcode);
-  assert(Iter != mctoll::X86AddlInstrInfo.end() && "Unknown opcode");
-  return Iter->second.InstKind;
+  auto info = mctoll::X86AddlInstrInfo[Opcode];
+  assert(info.first == Opcode && "Inconsistent map");
+  return info.second.InstKind;
 }
 
 static inline unsigned short getInstructionMemOpSize(unsigned int Opcode) {
-  auto Iter = mctoll::X86AddlInstrInfo.find(Opcode);
-  assert(Iter != mctoll::X86AddlInstrInfo.end() && "Unknown opcode");
-  return Iter->second.MemOpSize;
+  auto info = mctoll::X86AddlInstrInfo[Opcode];
+  assert(info.first == Opcode && "Inconsistent map");
+  return info.second.MemOpSize;
 }
 
 static inline bool isNoop(unsigned int Opcode) {
