@@ -1,9 +1,12 @@
-if(NOT (LLVM_TARGETS_TO_BUILD MATCHES "X86" OR LLVM_TARGETS_TO_BUILD MATCHES "ARM"))
-  return()
-endif()
+cmake_minimum_required(VERSION 3.15)
+project(llvm-mctoll)
 
 set(LLVM_MCTOLL_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(LLVM_MCTOLL_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
+
+find_package(LLVM REQUIRED CONFIG)
+list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+include(AddLLVM)
 
 llvm_map_components_to_libnames(llvm_libs
   ${LLVM_TARGETS_TO_BUILD}
@@ -31,10 +34,10 @@ endif()
 
 configure_file(
   ${LLVM_MCTOLL_SOURCE_DIR}/Raisers.def.in
-  ${LLVM_INCLUDE_DIR}/Raisers.def
+  ${CMAKE_CURRENT_BINARY_DIR}/Raisers.def
   )
 
-add_subdirectory(test)
+#add_subdirectory(test)
 
 add_llvm_tool(llvm-mctoll
   llvm-mctoll.cpp
