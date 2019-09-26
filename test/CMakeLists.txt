@@ -13,7 +13,7 @@ set(LLVM_MCTEST_DEPENDS llvm-mctoll)
 if (NOT LLVM_MCTOLL_BUILT_STANDALONE)
   list(APPEND
        LLVM_MCTEST_DEPENDS
-       clang count FileCheck llc lli llvm-as llvm-cat llvm-dis llvm-mc not opt)
+       count FileCheck llc lli llvm-as llvm-cat llvm-dis llvm-mc not opt)
 endif()
 
 configure_lit_site_cfg(
