@@ -1643,7 +1643,7 @@ bool X86MachineInstructionRaiser::raiseMoveFromMemInstr(const MachineInstr &MI,
                                                         Value *MemRefValue) {
   const unsigned int Opcode = MI.getOpcode();
   const MCInstrDesc &MIDesc = MI.getDesc();
-  unsigned LoadOpIndex = 0;
+  unsigned LoadOpIndex = 0; // destination operand
   // Get index of memory reference in the instruction.
   int MemoryRefOpIndex = getMemoryRefOpIndex(MI);
   assert(MemoryRefOpIndex == 1 &&
@@ -1682,6 +1682,8 @@ bool X86MachineInstructionRaiser::raiseMoveFromMemInstr(const MachineInstr &MI,
   } else {
     // If it is an effective address value or a select instruction, convert it
     // to a pointer to load register type.
+    // TODO: fails with $eax = MOVZX32rm16 $rdi, 1,
+    // $noreg, 0, $noreg, <0x1c8fccccdf8>    OpSize 4 numOps 1
     PointerType *PtrTy =
         PointerType::get(getPhysRegOperandType(MI, LoadOpIndex), 0);
     if ((isEffectiveAddrValue(MemRefValue)) || isa<SelectInst>(MemRefValue)) {
@@ -1704,7 +1706,7 @@ bool X86MachineInstructionRaiser::raiseMoveFromMemInstr(const MachineInstr &MI,
                      MaybeAlign(MemAlignment));
     LdInst = getRaisedValues()->setInstMetadataRODataContent(LdInst);
     RaisedBB->getInstList().push_back(LdInst);
-
+    // TODO: handle CMOV32rm
     LLVMContext &Ctx(MF.getFunction().getContext());
     Type *MemTy = nullptr;
     Type *ExtTy = nullptr;
@@ -2380,6 +2382,15 @@ bool X86MachineInstructionRaiser::raiseCompareMachineInstr(
 // stack.
 bool X86MachineInstructionRaiser::raiseMemRefMachineInstr(
     const MachineInstr &MI) {
+#if 0
+  89 48 28                mov    DWORD PTR [rax+0x28],ecx
+  31 c0                   xor    eax,eax
+  ff 44 84 c8             inc    DWORD PTR [rsp+rax*4-0x38]
+
+  MOV32mr $rax, 1, $noreg, 40, $noreg, $ecx, <0x181a66522c8>
+  $eax = XOR32rr $eax(tied-def 0), $eax, <0x181a6651bd8>, implicit-def $eflags
+  INC32m $rsp, 4, $rax, -56, $noreg, <0x181a66522f8>, implicit-def $eflags
+#endif
 
   // Handle the push instruction that is marked as a memory store
   // instruction
@@ -2391,7 +2402,13 @@ bool X86MachineInstructionRaiser::raiseMemRefMachineInstr(
     return raisePopInstruction(MI);
   }
 
+  // MI.dump();
   const MCInstrDesc &MIDesc = MI.getDesc();
+
+  MI.dump();
+  auto OpSize = getInstructionMemOpSize(MI);
+  printf("OpSize %u\n", OpSize);
+
   unsigned int Opcode = MI.getOpcode();
 
   int LoadOrStoreOpIndex = -1;
@@ -2483,29 +2500,97 @@ bool X86MachineInstructionRaiser::raiseMemRefMachineInstr(
   // Now that we have all necessary information about memory reference and
   // the load/store operand, we can raise the memory referencing instruction
   // according to the opcode.
+  bool success = false;
+  unsigned numOps = MIDesc.getNumOperands() - X86::AddrNumOperands;
+  printf("numOps %u\n", numOps);
 
-  switch (getInstructionKind(Opcode)) {
+  switch (MIDesc.TSFlags & X86II::FormMask) {
+  case X86II::AddRegFrm:
+    // REX |= isREXExtendedReg(MI, CurOp++) << 0; // REX.B
+    break;
+  case X86II::MRMSrcMem:   // MOV32rm, XADD32rm
+  case X86II::MRMSrcMemCC: // only CMOV32rm, not covered by isMoveReg()
+  case X86II::MRMDestReg:
+    if (MIDesc.canFoldAsLoad() ||
+        instrNameStartsWith(
+            MI, "MOV")) { // TODO: which condition, second needed for MOVZX
+      // Move register from memory
+      success = raiseMoveFromMemInstr(MI, MemoryRefValue);
+      break;
+    }
+    /*
+        $esi = AND32rm $esi(tied-def 0), $rdi, 1, $noreg, 0, $noreg,
+                <0x1838d8cb888>, implicit-def $eflags
+                OpSize 4 numOps 2
+        */
+    assert(numOps == 2);
+    success = raiseBinaryOpMemToRegInstr(MI, MemoryRefValue);
+    break;
+  case X86II::MRMDestMem: // MOV32mr, SHLD32mrCL
+  case X86II::MRMSrcReg:
+    assert(instrNameStartsWith(MI, "MOV") || instrNameStartsWith(MI, "CMOV"));
     // Move register or immediate to memory
-  case InstructionKind::MOV_TO_MEM:
-    return raiseMoveToMemInstr(MI, MemoryRefValue);
+    success = raiseMoveToMemInstr(MI, MemoryRefValue);
+    break;
   case InstructionKind::INPLACE_MEM_OP:
-    return raiseInplaceMemOpInstr(MI, MemoryRefValue);
-  // Move register from memory
-  case InstructionKind::MOV_FROM_MEM:
-    return raiseMoveFromMemInstr(MI, MemoryRefValue);
-  case InstructionKind::BINARY_OP_RM:
-    return raiseBinaryOpMemToRegInstr(MI, MemoryRefValue);
-  case InstructionKind::DIVIDE_MEM_OP:
-    return raiseDivideInstr(MI, MemoryRefValue);
+  case X86II::MRMXmCC: // SETCCm
+  case X86II::MRMXrCC: // SETCCr
+    success = raiseSetCCMachineInstr(MI);
+    break;
+  case X86II::MRMXm:
+  case X86II::MRM0m: // INCm, ADD64mi8
+  case X86II::MRM1m:
+  case X86II::MRM2m:
+  case X86II::MRM3m:
+  case X86II::MRM4m:
+  case X86II::MRM5m:
+  case X86II::MRM6m:
+  case X86II::MRM7m:
+    // not instruction with memory operand. It is an instruction that loads and
+    // stores to memory.
+    if (numOps == 0) {
+		success = raiseInplaceMemOpInstr(MI, MemoryRefValue);
+		break;
+    }
+    if (numOps == 1) {
+      /*
+          ADD64mi8 $rdi, 1, $noreg, 0, $noreg, 5, <0x23e02bcd4f8>, implicit-def
+         $eflags OpSize 8 numOps 1
+      */
+      assert(X86II::hasImm(MIDesc.TSFlags));
+      success = raiseMoveToMemInstr(MI, MemoryRefValue);
+      break;
+    }
+    assert(false);
+    break;
+  case X86II::MRMXr:
+  case X86II::MRM0r:
+  case X86II::MRM1r:
+  case X86II::MRM2r:
+  case X86II::MRM3r:
+  case X86II::MRM4r:
+  case X86II::MRM5r:
+  case X86II::MRM6r:
+  case X86II::MRM7r:
+    //    REX |= isREXExtendedReg(MI, CurOp++) << 0; // REX.B
+    break;
+  }
+  switch (getInstructionKind(Opcode)) {
+  case InstructionKind::DIVIDE_MEM_OP: {
+    success = raiseDivideInstr(MI, MemoryRefValue);
+  } break;
   case InstructionKind::LOAD_FPU_REG:
     return raiseLoadIntToFloatRegInstr(MI, MemoryRefValue);
   case InstructionKind::STORE_FPU_REG:
     return raiseStoreIntToFloatRegInstr(MI, MemoryRefValue);
   default:
+    if (success)
+      break;
+
     LLVM_DEBUG(MI.dump());
     assert(false && "Unhandled memory referencing instruction");
   }
-  return false;
+  return success;
 }
 
 bool X86MachineInstructionRaiser::raiseSetCCMachineInstr(
@@ -2522,6 +2607,7 @@ bool X86MachineInstructionRaiser::raiseSetCCMachineInstr(
   assert(MIDesc.getNumImplicitUses() == 1 &&
          MIDesc.hasImplicitUseOfPhysReg(X86::EFLAGS) &&
          "Not found expected implicit use of eflags in set instruction.");
+  // TODO: handle SETCCm
 
   // Get the BasicBlock corresponding to MachineBasicBlock of MI.
   // Raised instruction is added to this BasicBlock.
@@ -3609,12 +3695,61 @@ bool X86MachineInstructionRaiser::raiseGenericMachineInstr(
     const MachineInstr &MI) {
   unsigned int Opcode = MI.getOpcode();
   bool success = false;
+  auto &MIDesc = MI.getDesc();
+  MI.dump();
+  unsigned numOps = MIDesc.getNumOperands();
+  printf("numOps %u\n", numOps);
+
+  if (MIDesc.isMoveReg())
+    success = raiseMoveRegToRegMachineInstr(MI);
+  else if (MIDesc.isMoveImmediate())
+    success = raiseMoveImmToRegMachineInstr(MI);
+  else if (MIDesc.isCompare() &&
+           !instrNameStartsWith(MI, "TEST")) // TODO: remove special case?
+    success = raiseCompareMachineInstr(MI, false, nullptr);
+  else if (X86II::hasImm(MIDesc.TSFlags)) {
+    /*
+        TEST32i32 65535, <0x265d223c9c8>, implicit-def $eflags, implicit $eax
+                numOps 1
+*/
+    // assert(numOps == 3);
+    success = raiseBinaryOpImmToRegMachineInstr(MI);
+  } else
+    switch (MIDesc.TSFlags & X86II::FormMask) {
+    case X86II::MRMDestReg: // MOV32rr, SHLD32rrCL
+    case X86II::MRMSrcReg:
+      /*
+                TEST16rr $ax, $ax, <0x15e3c44cc18>, implicit-def $eflags
+                numOps 2
+                        $eax = SUB32rr $eax(tied-def 0), $esi, <0x15e3c44c678>,
+         implicit-def $eflags numOps 3
+          */
+      assert(numOps == 2 || numOps == 3);
+      success = raiseBinaryOpRegToRegMachineInstr(MI);
+      break;
+    case X86II::MRMSrcRegCC: // only CMOV32rr
+      // indeed not covered by isMoveReg()
+      success = raiseMoveRegToRegMachineInstr(MI);
+      break;
+    case X86II::MRMXrCC: // only SETCCr
+    case X86II::MRMXmCC: // only SETCCm
+      success = raiseSetCCMachineInstr(MI);
+      break;
+    case X86II::MRMXr:
+    case X86II::MRM0r:
+    case X86II::MRM1r:
+    case X86II::MRM2r:
+    case X86II::MRM3r:
+    case X86II::MRM4r:
+    case X86II::MRM5r:
+    case X86II::MRM6r:
+    case X86II::MRM7r:
+      //    REX |= isREXExtendedReg(MI, CurOp++) << 0; // REX.B
+      break;
+    }
 
   // Now raise the instruction according to the opcode kind
   switch (getInstructionKind(Opcode)) {
-  case InstructionKind::BINARY_OP_WITH_IMM:
-    success = raiseBinaryOpImmToRegMachineInstr(MI);
-    break;
   case InstructionKind::BINARY_OP_MRI_OR_MRC:
     success = raiseBinaryOpMRIOrMRCEncodedMachineInstr(MI);
     break;
@@ -3626,21 +3761,6 @@ bool X86MachineInstructionRaiser::raiseGenericMachineInstr(
     break;
   case InstructionKind::LEA_OP:
     success = raiseLEAMachineInstr(MI);
-    break;
-  case InstructionKind::MOV_RR:
-    success = raiseMoveRegToRegMachineInstr(MI);
-    break;
-  case InstructionKind::MOV_RI:
-    success = raiseMoveImmToRegMachineInstr(MI);
-    break;
-  case InstructionKind::BINARY_OP_RR:
-    success = raiseBinaryOpRegToRegMachineInstr(MI);
-    break;
-  case InstructionKind::SETCC:
-    success = raiseSetCCMachineInstr(MI);
-    break;
-  case InstructionKind::COMPARE:
-    success = raiseCompareMachineInstr(MI, false, nullptr);
     break;
   case InstructionKind::FPU_REG_OP:
     success = raiseFPURegisterOpInstr(MI);
@@ -3654,6 +3774,9 @@ bool X86MachineInstructionRaiser::raiseGenericMachineInstr(
     success = raiseDivideInstr(MI, SrcVal);
   } break;
   default: {
+    if (success)
+      break;
+
     dbgs() << "*** Generic instruction not raised : " << MF.getName().data()
            << "\n\t";
     MI.print(dbgs());
