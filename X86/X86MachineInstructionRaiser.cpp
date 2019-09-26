@@ -44,6 +44,24 @@ using namespace llvm;
 using namespace mctoll;
 using namespace X86RegisterUtils;
 
+static uint8_t getInstructionMemOpSize(const MachineInstr &MI) {
+  const MCInstrDesc &MIDesc = MI.getDesc();
+  // see X86MCCodeEmitter
+  bool hasRexWPrefix = MIDesc.TSFlags & X86II::REX_W;
+  if (hasRexWPrefix) // TODO:
+                     // https://wiki.osdev.org/X86-64_Instruction_Encoding#Usage
+                     // use object file bitness
+    return 8;
+  switch (MIDesc.TSFlags & X86II::OpSizeMask) {
+    //    case X86II::OpSizeFixed: is true for 1 byte inc and 8 byte inc
+  case X86II::OpSize16:
+    return 2;
+  case X86II::OpSize32:
+    return 4;
+  }
+  return 1;
+}
+
 // Constructor
 
 X86MachineInstructionRaiser::X86MachineInstructionRaiser(MachineFunction &MF,
@@ -1255,7 +1273,7 @@ bool X86MachineInstructionRaiser::raiseBinaryOpMemToRegInstr(
   BasicBlock *RaisedBB = getRaisedBasicBlock(MI.getParent());
 
   unsigned int DestPReg = DestOp.getReg();
-  unsigned int MemAlignment = getInstructionMemOpSize(Opcode);
+  unsigned int MemAlignment = getInstructionMemOpSize(MI);
   Type *DestopTy = getPhysRegOperandType(MI, DestIndex);
   Value *DestValue = getRegOrArgValue(DestPReg, MI.getParent()->getNumber());
   assert(DestValue != nullptr &&
@@ -1783,7 +1801,7 @@ bool X86MachineInstructionRaiser::raiseMoveToMemInstr(const MachineInstr &MI,
   // Raised instruction is added to this BasicBlock.
   BasicBlock *RaisedBB = getRaisedBasicBlock(MI.getParent());
 
-  unsigned int memAlignment = getInstructionMemOpSize(MI.getOpcode());
+  unsigned int memAlignment = getInstructionMemOpSize(MI);
   Value *SrcValue = nullptr;
   Type *SrcOpTy = nullptr;
 
@@ -1912,7 +1930,7 @@ bool X86MachineInstructionRaiser::raiseInplaceMemOpInstr(const MachineInstr &MI,
   BasicBlock *RaisedBB = getRaisedBasicBlock(MI.getParent());
   LLVMContext &Ctx(MF.getFunction().getContext());
 
-  unsigned int memAlignment = getInstructionMemOpSize(MI.getOpcode());
+  unsigned int memAlignment = getInstructionMemOpSize(MI);
 
   // Note that not instruction with memory operand loads from MemrefVal,
   // computes not operation on the loaded value and stores it back in the
