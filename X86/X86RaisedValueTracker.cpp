@@ -258,129 +258,130 @@ Value *X86RaisedValueTracker::getReachingDef(unsigned int PhysReg, int MBBNo) {
   LLVMContext &Ctxt(MF.getFunction().getContext());
   // Always convert PhysReg to the 64-bit version.
   unsigned int SuperReg = x86MIRaiser->find64BitSuperReg(PhysReg);
-  Value *RetValue = nullptr;
 
-  std::vector<std::pair<int, Value *>> ReachingDefs;
   // Look for the most recent definition of SuperReg in current block.
   const std::pair<int, Value *> LocalDef =
       getInBlockRegOrArgDefVal(SuperReg, MBBNo);
 
   if (LocalDef.second != nullptr) {
     assert((LocalDef.first == MBBNo) && "Inconsistent local def info found");
-    RetValue = LocalDef.second;
-  } else {
-    const ModuleRaiser *MR = x86MIRaiser->getModuleRaiser();
-    ReachingDefs = getGlobalReachingDefs(PhysReg, MBBNo);
-    // If there are more than one distinct incoming reaching defs
-    if (ReachingDefs.size() > 1) {
-      // 1. Allocate 64-bit stack slot
-      // 2. store each of the incoming values in that stack slot. cast the value
-      // as needed.
-      // 3. load from the stack slot
-      // 4. Return loaded value - RetValue
-
-      // 1. Allocate 64-bit stack slot
-      const DataLayout &DL = MR->getModule()->getDataLayout();
-      unsigned allocaAddrSpace = DL.getAllocaAddrSpace();
-      Type *AllocTy = Type::getInt64Ty(Ctxt);
-      unsigned int typeAlignment = DL.getPrefTypeAlignment(AllocTy);
-
-      // Create alloca instruction to allocate stack slot
-      AllocaInst *Alloca =
-          new AllocaInst(AllocTy, allocaAddrSpace, 0, typeAlignment, "");
-
-      // Create a stack slot associated with the alloca instruction of size 8
-      unsigned int StackFrameIndex = MF.getFrameInfo().CreateStackObject(
-          typeAlignment, DL.getPrefTypeAlignment(AllocTy),
-          false /* isSpillSlot */, Alloca);
-
-      // Compute size of new stack object.
-      const MachineFrameInfo &MFI = MF.getFrameInfo();
-      // Size of currently allocated object size
-      int64_t ObjectSize = MFI.getObjectSize(StackFrameIndex);
-      // Get the offset of the top of stack. Note that stack objects in MFI are
-      // not sorted by offset. So we need to walk the stack objects to find the
-      // offset of the top stack object.
-      int64_t StackTopOffset = 0;
-      for (int StackIndex = MFI.getObjectIndexBegin();
-           StackIndex < MFI.getObjectIndexEnd(); StackIndex++) {
-        int64_t ObjOffset = MFI.getObjectOffset(StackIndex);
-        if (ObjOffset < StackTopOffset)
-          StackTopOffset = ObjOffset;
-      }
-      int64_t Offset = StackTopOffset - ObjectSize;
-
-      // Set object size.
-      MF.getFrameInfo().setObjectOffset(StackFrameIndex, Offset);
-
-      // Add the alloca instruction to entry block
-      x86MIRaiser->insertAllocaInEntryBlock(Alloca);
-
-      // If PhysReg is defined in MBBNo, store the defined value in the
-      // newly created stack slot.
-      std::pair<int, Value *> MBBNoRDPair =
-          getInBlockRegOrArgDefVal(PhysReg, MBBNo);
-      Value *DefValue = MBBNoRDPair.second;
-      if (DefValue != nullptr) {
-        StoreInst *StInst = new StoreInst(DefValue, Alloca);
-        x86MIRaiser->getRaisedFunction()
-            ->getEntryBlock()
-            .getInstList()
-            .push_back(StInst);
-      }
-      // The store instruction simply stores value defined on stack. No defines
-      // are affected. So, no PhysReg to SSA mapping needs to be updated.
-
-      // 2. Store each of the reaching definitions at the end of corresponding
-      // blocks that define them in that stack slot. Cast the value as needed.
-      for (auto const &MBBVal : ReachingDefs) {
-        // Find the BasicBlock corresponding to MachineBasicBlock in MBBVal
-        // map.
-        if (MBBVal.second == nullptr) {
-          // This is an incoming edge from a block that is not yet
-          // raised. Record this in the set of incomplete promotions that will
-          // be handled after all blocks are raised.
-          x86MIRaiser->recordDefsToPromote(PhysReg, MBBVal.first, Alloca);
-        } else {
-          StoreInst *StInst = x86MIRaiser->promotePhysregToStackSlot(
-              PhysReg, MBBVal.second, MBBVal.first, Alloca);
-          assert(StInst != nullptr &&
-                 "Failed to promote reaching definition to stack slot");
-        }
-      }
-      // 3. load from the stack slot for use in current block
-      Instruction *LdReachingVal = new LoadInst(Alloca);
-      // Insert load instruction
-      x86MIRaiser->getRaisedBasicBlock(MF.getBlockNumbered(MBBNo))
-          ->getInstList()
-          .push_back(LdReachingVal);
-      // Stack slots are always 64-bit. So, make sure that the loaded value has
-      // the type that can be represented by PhysReg.
-      Type *RegType = (isEflagBit(PhysReg))
-                          ? Type::getInt1Ty(Ctxt)
-                          : x86MIRaiser->getPhysRegType(PhysReg);
-      Type *LdReachingValType = LdReachingVal->getType();
-      assert(LdReachingValType->isIntegerTy() &&
-             "Unhandled type mismatch of reaching register definition");
-      if (RegType != LdReachingValType) {
-        // Create cast instruction
-        Instruction *CInst = CastInst::Create(
-            CastInst::getCastOpcode(LdReachingVal, false, RegType, false),
-            LdReachingVal, RegType);
-        // Insert the cast instruction
-        x86MIRaiser->getRaisedBasicBlock(MF.getBlockNumbered(MBBNo))
-            ->getInstList()
-            .push_back(CInst);
-        LdReachingVal = CInst;
-      }
-      RetValue = LdReachingVal;
-      // Record that PhysReg is now defined as load from stack location in
-      // current MBB with MBBNo.
-      setPhysRegSSAValue(PhysReg, MBBNo, RetValue);
-    } else if (ReachingDefs.size() == 1)
-      // Just return the value of the single reaching definition
-      RetValue = ReachingDefs[0].second;
+    return LocalDef.second;
   }
+
+  const ModuleRaiser *MR = x86MIRaiser->getModuleRaiser();
+  auto ReachingDefs = getGlobalReachingDefs(PhysReg, MBBNo);
+
+  if (ReachingDefs.size() == 1)
+    // Just return the value of the single reaching definition
+    return ReachingDefs[0].second;
+
+  if (ReachingDefs.size() == 0)
+    return nullptr;
+
+  // There are more than one distinct incoming reaching defs
+  assert(ReachingDefs.size() > 1);
+
+  // 1. Allocate 64-bit stack slot
+  // 2. store each of the incoming values in that stack slot. cast the value
+  // as needed.
+  // 3. load from the stack slot
+  // 4. Return loaded value - RetValue
+
+  // 1. Allocate 64-bit stack slot
+  const DataLayout &DL = MR->getModule()->getDataLayout();
+  unsigned allocaAddrSpace = DL.getAllocaAddrSpace();
+  Type *AllocTy = Type::getInt64Ty(Ctxt);
+  unsigned int typeAlignment = DL.getPrefTypeAlignment(AllocTy);
+
+  // Create alloca instruction to allocate stack slot
+  AllocaInst *Alloca =
+      new AllocaInst(AllocTy, allocaAddrSpace, 0, typeAlignment, "");
+
+  // Create a stack slot associated with the alloca instruction of size 8
+  unsigned int StackFrameIndex = MF.getFrameInfo().CreateStackObject(
+      typeAlignment, DL.getPrefTypeAlignment(AllocTy), false /* isSpillSlot */,
+      Alloca);
+
+  // Compute size of new stack object.
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  // Size of currently allocated object size
+  int64_t ObjectSize = MFI.getObjectSize(StackFrameIndex);
+  // Get the offset of the top of stack. Note that stack objects in MFI are
+  // not sorted by offset. So we need to walk the stack objects to find the
+  // offset of the top stack object.
+  int64_t StackTopOffset = 0;
+  for (int StackIndex = MFI.getObjectIndexBegin();
+       StackIndex < MFI.getObjectIndexEnd(); StackIndex++) {
+    int64_t ObjOffset = MFI.getObjectOffset(StackIndex);
+    if (ObjOffset < StackTopOffset)
+      StackTopOffset = ObjOffset;
+  }
+  int64_t Offset = StackTopOffset - ObjectSize;
+
+  // Set object size.
+  MF.getFrameInfo().setObjectOffset(StackFrameIndex, Offset);
+
+  // Add the alloca instruction to entry block
+  x86MIRaiser->insertAllocaInEntryBlock(Alloca);
+
+  // If PhysReg is defined in MBBNo, store the defined value in the
+  // newly created stack slot.
+  std::pair<int, Value *> MBBNoRDPair =
+      getInBlockRegOrArgDefVal(PhysReg, MBBNo);
+  Value *DefValue = MBBNoRDPair.second;
+  if (DefValue != nullptr) {
+    StoreInst *StInst = new StoreInst(DefValue, Alloca);
+    x86MIRaiser->getRaisedFunction()->getEntryBlock().getInstList().push_back(
+        StInst);
+  }
+  // The store instruction simply stores value defined on stack. No defines
+  // are affected. So, no PhysReg to SSA mapping needs to be updated.
+
+  // 2. Store each of the reaching definitions at the end of corresponding
+  // blocks that define them in that stack slot. Cast the value as needed.
+  for (auto const &MBBVal : ReachingDefs) {
+    // Find the BasicBlock corresponding to MachineBasicBlock in MBBVal
+    // map.
+    if (MBBVal.second == nullptr) {
+      // This is an incoming edge from a block that is not yet
+      // raised. Record this in the set of incomplete promotions that will
+      // be handled after all blocks are raised.
+      x86MIRaiser->recordDefsToPromote(PhysReg, MBBVal.first, Alloca);
+    } else {
+      StoreInst *StInst = x86MIRaiser->promotePhysregToStackSlot(
+          PhysReg, MBBVal.second, MBBVal.first, Alloca);
+      assert(StInst != nullptr &&
+             "Failed to promote reaching definition to stack slot");
+    }
+  }
+  // 3. load from the stack slot for use in current block
+  Instruction *LdReachingVal = new LoadInst(Alloca);
+  // Insert load instruction
+  x86MIRaiser->getRaisedBasicBlock(MF.getBlockNumbered(MBBNo))
+      ->getInstList()
+      .push_back(LdReachingVal);
+  // Stack slots are always 64-bit. So, make sure that the loaded value has
+  // the type that can be represented by PhysReg.
+  Type *RegType = (isEflagBit(PhysReg)) ? Type::getInt1Ty(Ctxt)
+                                        : x86MIRaiser->getPhysRegType(PhysReg);
+  Type *LdReachingValType = LdReachingVal->getType();
+  assert(LdReachingValType->isIntegerTy() &&
+         "Unhandled type mismatch of reaching register definition");
+  if (RegType != LdReachingValType) {
+    // Create cast instruction
+    Instruction *CInst = CastInst::Create(
+        CastInst::getCastOpcode(LdReachingVal, false, RegType, false),
+        LdReachingVal, RegType);
+    // Insert the cast instruction
+    x86MIRaiser->getRaisedBasicBlock(MF.getBlockNumbered(MBBNo))
+        ->getInstList()
+        .push_back(CInst);
+    LdReachingVal = CInst;
+  }
+  Value* RetValue = LdReachingVal;
+  // Record that PhysReg is now defined as load from stack location in
+  // current MBB with MBBNo.
+  setPhysRegSSAValue(PhysReg, MBBNo, RetValue);
 
   return RetValue;
 }
