@@ -151,6 +151,13 @@ static InstructionKind getInstructionKind(const MachineInstr &MI) {
 
   MI.dump();
 
+  if (instrNameStartsWith(MI, "ILD") || instrNameStartsWith(MI, "LD_"))
+    return LOAD_FPU_REG;
+  if (instrNameStartsWith(MI, "ST_"))
+    return STORE_FPU_REG;
+  // if (instrNameStartsWith(MI, "MUL_"))
+  // return FPU_REG_OP;
+
   if (MIDesc.mayLoad() || MIDesc.mayStore())
     return getMemInstructionKind(MI);
 
@@ -171,12 +178,6 @@ static InstructionKind getInstructionKind(const MachineInstr &MI) {
            "should have already been handled by isPush");
     return LEA_OP;
   }
-  if (instrNameStartsWith(MI, "ILD") || instrNameStartsWith(MI, "LD_"))
-    return LOAD_FPU_REG;
-  if (instrNameStartsWith(MI, "ST_"))
-    return STORE_FPU_REG;
-  // if (instrNameStartsWith(MI, "MUL_"))
-    // return FPU_REG_OP;
 
   if (X86II::hasImm(MIDesc.TSFlags)) {
     /*
