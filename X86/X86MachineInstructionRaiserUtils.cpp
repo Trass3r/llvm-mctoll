@@ -1194,6 +1194,9 @@ X86MachineInstructionRaiser::getGlobalVariableValueAt(const MachineInstr &MI,
       case ELF::STB_LOCAL:
         Lnkg = GlobalValue::InternalLinkage;
         break;
+      case ELF::STB_WEAK:
+        Lnkg = GlobalValue::WeakAnyLinkage;
+        break;
       default:
         assert(false && "Unhandled global symbol binding type");
       }
